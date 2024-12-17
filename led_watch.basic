@@ -1,0 +1,342 @@
+'/////////////////////////////////////////////////////////
+'///   RETRO LED WATCH  - LICENCE GPL  , author :  Bartosz (2005)
+'/////////////////////////////////////////////////////////
+$Device= tn2313   ' used device
+$Stack = 32    ' stack depth
+$Clock = 4   ' adjust for used crystal
+$I2C SDA = PORTD.1 , SCL = PORTD.0                          'Defines I2C port pins
+$Timer1 = Timer , Prescale = 1024
+
+Declare Interrupt Int0()
+Declare Interrupt Int1()
+
+Dim Minutes As Byte , Hours As Byte
+Dim Day As Byte , Month As Byte , Year As Byte, YearCh As Byte
+Dim Mp As Byte
+Dim Button1 As Bit , Button2 As Bit , Button3 As Bit
+Dim segarray7(10) As Byte,segarray7vf(10) As Byte
+Dim Proglevel As Byte
+
+
+Declare Sub Displaydigit(digit As Byte , Pos As Byte)
+Declare Sub Settime()
+Declare Sub Incrase_time(pLevel As Byte)
+Declare Sub Gettime()
+Declare Sub Showtime()
+Declare Sub Showdate()
+Declare Sub Showyear()
+
+Const Leddelay = 5  
+Const ButtonDelay = 1000                        
+Const PCF8583=&ha0
+Const DispDelay=800
+
+$Def button3pin=PINA.1
+$Def button1pin=PIND.2
+$Def button2pin=PIND.3
+
+Int0 Low
+Int1 Low              
+           
+DDRA.0 = 1  'set LED disp #1 as output
+DDRD.4 = 1  'set LED disp #2 as output
+DDRD.5 = 1  'set LED disp #3 as output
+DDRD.6 = 1  'set LED disp #4 as output
+
+PORTA.0 = 1
+PORTD.4 = 1
+PORTD.5 = 1
+PORTD.6 = 1
+
+
+                     
+DDRA.1 = 0 'button1 INT0 as input
+DDRD.2 = 0 'button2 INT1 as input
+DDRD.3 = 0 'button3 as input
+
+PORTA.1 = 1 '1st  switch int 0 pin pull up
+PORTD.2 = 1 '2nd int 1 pin pull up
+PORTD.3 = 1 '3rd switch pin pull up
+
+
+DDRB = &B11111111    'LED display port output
+PORTB = &B11111111   '7 segment display  port  off
+
+Enable Int0
+Enable Int1
+Enable Interrupts
+Start Timer1
+
+segarray7=(&B10000000 , &B11010011 , &B00000110, &B00000011 , &B01010001 , &B00100001 , &B00100000 , &B10010011 , &B0000000 , &B00000001)
+segarray7vf=(&B10000000 , &B11110100 , &B00000110 , &B00100100 , &B01110000 , &B00100001 , &B00000001 , &B11100100 , &B0000000 , &B00100000)
+
+Button1=0                
+Button2=0 
+Button3=0 
+Proglevel=0
+Year=0
+'////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+'////////////////////////////////////////Main loop//////////////////////////////////////////////////////////////////////
+'////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Do
+
+If Button3 = 0 Then
+   Disable Interrupts
+   If Button1 = 1 Then
+     
+      Gettime()    
+      If button3pin = 0 Then 
+         WaitMs 2000
+         If button3pin = 0 Then
+            Button3 = 1
+         End If
+      End If
+      Timer1 = 0
+      While Timer1 < Dispdelay     
+         Showtime()
+      Wend
+      Button1 = 0
+      'Enable Interrupts
+   End If
+
+   If Button2 = 1 Then
+      'Disable Interrupts
+      Gettime()
+      Timer1 = 0
+      While Timer1 < Dispdelay   
+         Showdate()
+      Wend
+      Button2 = 0
+    
+   End If
+   Enable Interrupts
+End If
+
+If Button3 = 1 Then
+
+   Disable Interrupts
+   
+   If Proglevel<2 Then
+      Showtime()
+   ElseIf Proglevel>2 Then
+      Showdate()
+   Else
+      Showyear()
+   End If
+
+  
+   If button1pin = 0 And Timer1 >= ButtonDelay Then
+      Incrase_time(Proglevel)
+      Timer1=0       
+   End If
+
+   If button2pin = 0 And Timer1 >= ButtonDelay Then
+      Proglevel=Proglevel+1
+      If Proglevel>4 Then
+          Button1 = 0
+          Button2 = 0
+          button3=0
+          Proglevel=0  
+          Settime()
+      End If
+      Timer1=0
+   End If
+  
+   Enable Interrupts 
+
+Else
+    PowerDown    
+End If
+
+Loop
+
+End
+
+Interrupt Int0()
+
+      Button1 = 1
+
+End Interrupt
+
+Interrupt Int1()
+
+      Button2 = 1
+
+End Interrupt
+
+
+Sub Incrase_time(pLevel As Byte)
+
+       If pLevel=0 Then        'set minutes        
+         Mp=FromBcd(Hours)
+         Mp=Mp+1
+         If Mp > 24 Then
+            Mp = 0
+         End If
+         Hours=Bcd(Mp)             
+      ElseIf pLevel=1 Then   'set hours
+         Mp=FromBcd(Minutes)
+         Mp=Mp+1
+         If Mp > 59 Then
+            Mp = 0
+         End If
+         Minutes=Bcd(Mp)  
+      ElseIf pLevel=2 Then   'set year          
+            Mp=FromBcd(Year)
+            Mp=Mp+1
+            If Mp > 99 Then
+               Mp = 0
+            End If     
+            If (Mp mod 4) = 0  Then
+               YearCh = 0
+            Else
+               YearCh = (Mp mod 4)
+            End If
+            Year=Bcd(Mp)
+           
+ '  End If            
+      ElseIf pLevel=3 Then   'set month
+            Mp=FromBcd(Month)
+            Mp=Mp+1
+            If Mp > 12 Then
+               Mp = 1
+            End If
+            Month=Bcd(Mp) 
+      ElseIf pLevel=4 Then   'set day number
+         Mp=FromBcd(Day)
+         Mp=Mp+1
+         If Month=4 Or Month=6 Or Month=9 Or  Month=11 Then           
+            If Mp > 30 Then
+               Mp = 1
+            End If      
+         ElseIf Month=2  Then
+            If YearCh = 0 Then
+               If Mp > 29 Then
+                  Mp = 1
+               End If
+            Else           
+               If Mp > 28 Then
+                  Mp = 1
+               End If           
+            End If
+         Else
+            If Mp > 31 Then
+               Mp = 1
+            End If                    
+         End If
+         Day=Bcd(Mp)                   
+      End If
+
+
+End Sub
+
+Sub Showtime()
+
+      Mp = Minutes And &B00001111
+      Mp = segarray7(Mp)
+      Displaydigit(mp , 4)
+
+      Mp = Minutes And &B11110000
+      Mp=Shift(Right,4,Mp)
+      Mp = segarray7vf(Mp)
+      Displaydigit(mp , 6)
+
+      Mp = Hours And &B00001111
+      Mp = segarray7(Mp)
+      Displaydigit(mp , 5)
+
+      Mp = Hours And &B00110000
+      Mp=Shift(Right,4,Mp)
+      Mp = segarray7(Mp)
+      Displaydigit(mp , 0)
+
+End Sub
+
+Sub Showdate()
+
+      Mp = Day And &B00001111
+      Mp = segarray7(Mp)
+      Displaydigit(mp , 4)
+
+      Mp = Day And &B00110000
+      Mp=Shift(Right,4,Mp)
+      Mp = segarray7vf(Mp)
+      Mp = Mp Or &b00001000
+      Displaydigit(mp , 6)
+
+      Mp = Month And &B00001111
+      Mp = segarray7(Mp)
+      Displaydigit(mp , 5)
+
+      Mp = Month And &B00010000
+      Mp=Shift(Right,4,Mp)
+      Mp = segarray7(Mp)
+      Displaydigit(mp , 0)
+
+
+End Sub
+
+Sub Showyear()
+
+      Mp = Year And &B00001111
+      Mp = segarray7(Mp)
+      Displaydigit(mp , 4)
+
+      Mp = Year And &B11110000
+      Mp=Shift(Right,4,Mp)
+      Mp = segarray7vf(Mp)
+      'Mp = Mp Or &b00001000
+      Displaydigit(Mp , 6)
+
+
+End Sub
+
+Sub Displaydigit(digit As Byte , Pos As Byte)
+
+      If Pos = 0 Then
+         PORTA.0 = 0
+         PORTB = digit
+         WaitMs Leddelay
+         PORTA.0 = 1
+      Else
+         PORTD.Pos = 0
+         PORTB = digit
+         WaitMs Leddelay
+         PORTD.Pos = 1     
+      End If
+
+End Sub
+
+Sub Gettime()                                                 'subroutine get time from RTC8583 clock
+  
+   I2Cstart PCF8583          'generate start
+   I2Cwrite 2
+   Minutes=I2Cread,Ack
+   Minutes=I2Cread,Ack
+   Hours=I2Cread,Ack
+   Day=I2Cread,Ack
+   Month=I2Cread,Nack
+   I2Cstop                   'generate stop
+   
+   YearCh = Day And &B11000000
+   YearCh = Shift(Right,6,Mp)
+
+End Sub
+
+Sub Settime()
+  
+   Day = Day And &B00111111
+   YearCh = Shift(Left,6,Mp)
+   Day = Day Or YearCh
+  
+   I2Cstart PCF8583          'generate start
+   I2Cwrite 2                'select seconds Register
+   I2Cwrite 0         'write seconds
+   I2Cwrite Minutes         'write minutes
+   I2Cwrite Hours        'Write Hours
+   I2Cwrite Day           'write days
+   I2Cwrite Month           'write months
+   I2Cstop
+  
+End Sub 
